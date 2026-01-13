@@ -22,11 +22,11 @@ public class ServiceBusEventSender : IEventSender, IAsyncDisposable
         _source = source;
     }
 
-    public async Task SendAsync<T>(string topic, T @event) where T : class
+    public async Task SendAsync<T>(string queueName, T @event) where T : class
     {
-        var sender = _senders.GetOrAdd(topic, t => _client.CreateSender(t));
+        var sender = _senders.GetOrAdd(queueName, q => _client.CreateSender(q));
 
-        var cloudEvent = CreateCloudEvent(topic, @event);
+        var cloudEvent = CreateCloudEvent(queueName, @event);
         var formatter = new JsonEventFormatter();
         var bytes = formatter.EncodeStructuredModeMessage(cloudEvent, out _);
 
@@ -39,7 +39,7 @@ public class ServiceBusEventSender : IEventSender, IAsyncDisposable
         await sender.SendMessageAsync(message);
     }
 
-    private CloudEvent CreateCloudEvent<T>(string topic, T data) where T : class
+    private CloudEvent CreateCloudEvent<T>(string queueName, T data) where T : class
     {
         return new CloudEvent
         {
@@ -49,7 +49,7 @@ public class ServiceBusEventSender : IEventSender, IAsyncDisposable
             Time = DateTimeOffset.UtcNow,
             DataContentType = "application/json",
             Data = JsonSerializer.Serialize(data),
-            Subject = topic
+            Subject = queueName
         };
     }
 

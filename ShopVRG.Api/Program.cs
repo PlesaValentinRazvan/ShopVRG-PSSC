@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Azure.Identity;
 using ShopVRG.Data;
 using ShopVRG.Data.Repositories;
 using ShopVRG.Domain.Repositories;
@@ -10,10 +11,45 @@ var builder = WebApplication.CreateBuilder(args);
 // Add services to the container
 builder.Services.AddControllers();
 
-// Configure SQLite database
-var dbPath = Path.Combine(builder.Environment.ContentRootPath, "shopvrg.db");
-builder.Services.AddDbContext<ShopDbContext>(options =>
-    options.UseSqlite($"Data Source={dbPath}"));
+// Configure database - Azure SQL or Local SQLite
+var azureSqlServer = builder.Configuration["Azure:SqlServer"];
+var azureSqlDatabase = builder.Configuration["Azure:SqlDatabase"];
+
+Console.WriteLine($"Environment: {(builder.Environment.IsDevelopment() ? "Development" : "Production")}");
+Console.WriteLine($"Azure:SqlServer = '{azureSqlServer}'");
+Console.WriteLine($"Azure:SqlDatabase = '{azureSqlDatabase}'");
+
+// Use Azure if credentials are configured (regardless of environment)
+var useAzure = !string.IsNullOrEmpty(azureSqlServer) && !string.IsNullOrEmpty(azureSqlDatabase);
+
+if (useAzure)
+{
+    Console.WriteLine("✓ Using Azure SQL Database with Managed Identity authentication");
+    
+    // Get connection string from appsettings.json (passwordless)
+    var connectionString = builder.Configuration.GetConnectionString("AZURE_SQL_CONNECTIONSTRING");
+    if (!string.IsNullOrEmpty(connectionString))
+    {
+        Console.WriteLine($"Using connection string from config");
+        builder.Services.AddDbContext<ShopDbContext>(options =>
+            options.UseSqlServer(connectionString));
+    }
+    else
+    {
+        // Fallback to constructed connection string
+        var builtConnectionString = $"Server=tcp:{azureSqlServer},1433;Initial Catalog={azureSqlDatabase};Encrypt=True;TrustServerCertificate=False;Connection Timeout=30;Authentication=\"Active Directory Default\";";
+        Console.WriteLine($"Using built connection string");
+        builder.Services.AddDbContext<ShopDbContext>(options =>
+            options.UseSqlServer(builtConnectionString));
+    }
+}
+else
+{
+    Console.WriteLine("⚠ Using local SQLite database");
+    var dbPath = Path.Combine(builder.Environment.ContentRootPath, "shopvrg.db");
+    builder.Services.AddDbContext<ShopDbContext>(options =>
+        options.UseSqlite($"Data Source={dbPath}"));
+}
 
 // Register repositories
 builder.Services.AddScoped<IProductRepository, ProductRepository>();
@@ -72,12 +108,17 @@ using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<ShopDbContext>();
 
-    // Delete and recreate for clean state (development only)
-    db.Database.EnsureDeleted();
-    db.Database.EnsureCreated();
+    if (!useAzure)
+    {
+        // Only delete/recreate for local SQLite (development only)
+        await db.Database.EnsureDeletedAsync();
+    }
+    
+    await db.Database.EnsureCreatedAsync();
 
-    Console.WriteLine($"Database location: {dbPath}");
-    Console.WriteLine($"Products in database: {db.Products.Count()}");
+    var dbType = useAzure ? "Azure SQL" : "SQLite";
+    Console.WriteLine($"Database type: {dbType}");
+    Console.WriteLine($"Products in database: {await db.Products.CountAsync()}");
 }
 
 // Configure the HTTP request pipeline
@@ -112,4 +153,4 @@ Console.WriteLine("  POST /api/shipping         - Ship order");
 Console.WriteLine("  GET  /api/shipping/carriers - List carriers");
 Console.WriteLine();
 
-app.Run();
+await app.RunAsync();
